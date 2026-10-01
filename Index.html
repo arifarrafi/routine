@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Teacher Routine Viewer</title>
+<script>try{var t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}</script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--mute:#5b6577;--line:#d9dde5;--navy:#1F3864;--eve:#fff2cc;--today:#e8f0fe;--err:#b3261e;--warn:#8a5a00;--info:#1f5fa8}
+[data-theme=dark]{--bg:#12161f;--card:#1a2030;--ink:#e8ebf2;--mute:#9aa4b6;--line:#2c3447;--navy:#8fb0ec;--eve:#3a3320;--today:#1f2b45;--err:#ff8a80;--warn:#f2c14e;--info:#7ab6ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;transition:background .2s,color .2s}
+header,main{max-width:1050px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+h1{font-size:20px;margin:0}.sub{color:var(--mute);font-size:13px}
+button,input{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 11px}
+button{cursor:pointer}button:hover{border-color:var(--navy)}:focus-visible{outline:2px solid var(--navy);outline-offset:2px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.menu{position:relative}.menu div{display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:6px;z-index:5;min-width:140px}
+.menu.open div{display:block}.menu div button{display:block;width:100%;border:0;text-align:left}
+.pick{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 14px}.pick input{flex:1;min-width:240px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+.pills button[aria-pressed=true]{background:var(--navy);color:var(--bg);border-color:var(--navy)}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}
+th{background:var(--navy);color:#fff;text-align:left;padding:8px 10px}[data-theme=dark] th{color:#12161f}
+td{padding:8px 10px;border-top:1px solid var(--line);vertical-align:top}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--line) 18%,transparent)}
+tr.eve{background:var(--eve)!important}td.today{background:var(--today)}
+.badge{font-size:12px;border:1px solid currentColor;border-radius:10px;padding:0 6px;margin-left:4px}
+.err{color:var(--err)}.warn{color:var(--warn)}.info{color:var(--info)}
+.sk{height:14px;border-radius:4px;background:var(--line);margin:10px 0;animation:p 1.2s infinite alternate}@keyframes p{to{opacity:.4}}
+.empty{padding:24px;text-align:center;color:var(--mute)}
+details summary{cursor:pointer;font-weight:600}
+@media(max-width:640px){thead{display:none}table,tbody,tr,td{display:block;width:100%}tr{border:1px solid var(--line);border-radius:8px;margin-bottom:10px;padding:6px}td{border:0;padding:3px 6px}td[data-l]::before{content:attr(data-l) ": ";color:var(--mute)}}
+@media print{header .bar,.pick,.pills,details{display:none}body{background:#fff;color:#000}th{background:#1F3864;color:#fff;-webkit-print-color-adjust:exact}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Teacher Routine Viewer</h1><div class="sub"><span id="sem"></span> <span id="upd"></span></div></div>
+  <div class="bar">
+    <button id="refresh" aria-label="Refresh data">Refresh</button>
+    <button id="theme" aria-label="Toggle light or dark theme"></button>
+    <div class="menu" id="menu"><button aria-haspopup="true" id="exp">Export</button>
+      <div><button id="pdf">PDF</button><button id="xlsx">Excel (XLSX)</button></div></div>
+  </div>
+</header>
+<main>
+  <div class="pick"><input id="q" list="tl" placeholder="Type an acronym or name, e.g. AAR" aria-label="Choose teacher" autocomplete="off"><datalist id="tl"></datalist>
+    <span class="pills" id="pills"></span></div>
+  <div id="who"></div><div id="view"></div><div id="warn"></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script>
+// ===== CONFIG =====
+const API_URL = 'PASTE_YOUR_WEB_APP_/exec_URL_HERE';
+const DAY_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const COLS = ['Day','Time','Room','Batch','Course Title','Course Code'];
+
+let D = null, tid = null, prog = 'all';
+const $ = id => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
+const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+
+// ===== DATA =====
+function jsonp(url) {
+  return new Promise((res, rej) => {
+    const n = 'cb' + Date.now(), s = document.createElement('script');
+    window[n] = d => { res(d); s.remove(); delete window[n]; };
+    s.onerror = () => rej(new Error('Network error')); s.src = url + '&callback=' + n; document.head.appendChild(s);
+  });
+}
+async function load(force) {
+  const url = API_URL + '?action=data' + (force ? '&refresh=1' : '');
+  let d;
+  try { const r = await fetch(url, { redirect: 'follow' }); d = await r.json(); } catch (e) { d = await jsonp(url); }
+  if (!d.ok) throw new Error(d.error || 'Server error');
+  store.set('rv_data', JSON.stringify(d)); return d;
+}
+function init(d) {
+  D = d; $('sem').textContent = d.semester || '';
+  $('upd').textContent = 'Last updated ' + new Date(d.generatedAt).toLocaleString();
+  const list = $('tl'); list.textContent = '';
+  d.teachers.slice().sort((a, b) => a.acronyms[0].localeCompare(b.acronyms[0])).forEach(t => {
+    const o = el('option'); o.value = t.acronyms.join('/') + ' – ' + t.name; o.dataset.id = t.id; list.appendChild(o);
+  });
+  if (!tid || !d.teachers.some(t => t.id === tid)) {
+    const want = (new URLSearchParams(location.search).get('t') || '').toLowerCase();
+    const hit = d.teachers.find(t => t.acronyms.some(a => a.toLowerCase() === want)) || d.teachers.find(t => t.id === store.get('rv_t'));
+    tid = hit ? hit.id : null;
+  }
+  const t = d.teachers.find(x => x.id === tid); if (t) $('q').value = t.acronyms.join('/') + ' – ' + t.name;
+  render();
+}
+
+// ===== RENDER =====
+function rows() {
+  return D.classes.filter(c => c.teacherId === tid && (prog === 'all' || c.program === prog))
+    .sort((a, b) => DAY_ORDER.indexOf(a.day) - DAY_ORDER.indexOf(b.day) || a.startMin - b.startMin);
+}
+function render() {
+  const who = $('who'), view = $('view'), wp = $('warn'); who.textContent = ''; view.textContent = ''; wp.textContent = '';
+  const t = D && D.teachers.find(x => x.id === tid);
+  if (!t) { view.appendChild(el('div', 'Choose a teacher to see their weekly routine.', 'empty')); return; }
+  const card = el('div', null, 'card'); card.appendChild(el('strong', t.name + ' (' + t.acronyms.join(', ') + ')'));
+  card.appendChild(el('div', [t.position, t.department].filter(Boolean).join(', '), 'sub'));
+  if (t.contact) { const a = el('a', t.contact); a.href = 'tel:' + t.contact.replace(/[^\d+]/g, ''); card.appendChild(a); }
+  who.appendChild(card);
+  const R = rows();
+  if (!R.length) { view.appendChild(el('div', 'No classes found for this teacher.', 'empty')); }
+  else {
+    const tb = el('table'), hd = el('tr'), body = el('tbody'), today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+    COLS.forEach(c => hd.appendChild(el('th', c))); tb.appendChild(el('thead')).appendChild(hd);
+    R.forEach((c, i) => {
+      const tr = el('tr'); if (c.program === 'evening') tr.className = 'eve';
+      const first = i === 0 || R[i - 1].day !== c.day;
+      if (first) { const n = R.filter(x => x.day === c.day).length, td = el('td', c.day); td.rowSpan = n; if (c.day === today) td.className = 'today'; tr.appendChild(td); }
+      const vals = [c.time, c.room || 'TBA', c.batch, c.courseTitle, c.courseCode];
+      vals.forEach((v, k) => { const td = el('td', v); td.dataset.l = COLS[k + 1]; if (k === 0 && c.spanInferred) { td.appendChild(el('span', ' ⓘ', 'info')).title = 'Duration inferred from empty cells'; } tr.appendChild(td); });
+      if (!first) { const dl = el('td', c.day); dl.dataset.l = 'Day'; dl.style.display = 'none'; }
+      body.appendChild(tr);
+    });
+    tb.appendChild(body); view.appendChild(tb);
+  }
+  const W = D.warnings.filter(w => (w.teacherIds || []).indexOf(tid) >= 0);
+  if (W.length) {
+    const d = el('details', null, 'card'); d.appendChild(el('summary', 'Warnings (' + W.length + ')'));
+    W.forEach(w => { const p = el('div'); p.appendChild(el('span', w.level, 'badge ' + w.level)); p.appendChild(el('span', ' ' + w.type + ': ' + w.message + ' [' + w.source + ']')); d.appendChild(p); });
+    wp.appendChild(d);
+  }
+}
+function pills() {
+  const box = $('pills');
+  [['all', 'All'], ['regular', 'Regular'], ['evening', 'Evening']].forEach(p => {
+    const b = el('button', p[1]); b.setAttribute('aria-pressed', p[0] === prog);
+    b.onclick = () => { prog = p[0]; [...box.children].forEach(x => x.setAttribute('aria-pressed', x === b)); render(); }; box.appendChild(b);
+  });
+}
+
+// ===== EXPORTS (light colours regardless of theme) =====
+const sem = () => (D.semester || '').replace(/\s+/g, '');
+function fname(ext) { const t = D.teachers.find(x => x.id === tid); return t.acronyms[0] + '_Class_Routine_' + sem() + '.' + ext; }
+const flat = c => [c.day, c.time, c.room || 'TBA', c.batch, c.courseTitle, c.courseCode];
+function exportPDF() {
+  const t = D.teachers.find(x => x.id === tid), R = rows(), doc = new window.jspdf.jsPDF({ orientation: 'landscape', format: 'a4' });
+  doc.setFontSize(15); doc.text('Class Routine – ' + t.name + ' (' + t.acronyms[0] + ')', 14, 15);
+  doc.setFontSize(10); doc.text(D.semester || '', 14, 21);
+  doc.autoTable({ startY: 26, head: [COLS], body: R.map(flat), theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 56, 100], textColor: 255, fontStyle: 'bold' }, alternateRowStyles: { fillColor: [242, 244, 248] },
+    didParseCell: h => { if (h.section === 'body' && R[h.row.index].program === 'evening') h.cell.styles.fillColor = [255, 242, 204]; },
+    didDrawPage: h => { doc.setFontSize(8); doc.text('Generated ' + new Date().toLocaleDateString() + '   Page ' + doc.internal.getNumberOfPages(), 14, doc.internal.pageSize.height - 8); } });
+  doc.save(fname('pdf'));
+}
+async function exportXLSX() {
+  const t = D.teachers.find(x => x.id === tid), R = rows(), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet(t.acronyms[0] + ' Routine', { views: [{ state: 'frozen', ySplit: 3 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+  const side = { style: 'thin', color: { argb: 'FFBFBFBF' } }, border = { top: side, left: side, bottom: side, right: side };
+  ws.addRow(['Class Routine – ' + t.name + ' (' + t.acronyms[0] + ')']).font = { name: 'Arial', bold: true, size: 14 };
+  ws.addRow([D.semester || '']).font = { name: 'Arial', italic: true };
+  const h = ws.addRow(COLS); h.eachCell(c => { c.font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }; c.border = border; });
+  R.forEach((c, i) => { const r = ws.addRow(flat(c).map(v => /^[=+\-@]/.test(v) ? "'" + v : v));
+    r.eachCell(x => { x.font = { name: 'Arial' }; x.border = border; const argb = c.program === 'evening' ? 'FFFFF2CC' : i % 2 ? 'FFF2F4F8' : null; if (argb) x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } }; }); });
+  [12, 22, 10, 14, 44, 18].forEach((w, i) => ws.getColumn(i + 1).width = w);
+  ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: 6 } };
+  const n = wb.addWorksheet('Notes'); n.addRow(['(W) = Weekend/evening program']);
+  D.warnings.filter(w => (w.teacherIds || []).indexOf(tid) >= 0).forEach(w => n.addRow([w.level + ' ' + w.type + ': ' + w.message + ' [' + w.source + ']']));
+  n.getColumn(1).width = 120;
+  const buf = await wb.xlsx.writeBuffer(), a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); a.download = fname('xlsx'); a.click();
+}
+
+// ===== EVENTS =====
+function setTheme(t) { document.documentElement.dataset.theme = t; store.set('theme', t); $('theme').textContent = t === 'dark' ? '☀ Light' : '☾ Dark'; }
+$('theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+$('exp').onclick = () => $('menu').classList.toggle('open');
+$('pdf').onclick = () => { $('menu').classList.remove('open'); if (tid) exportPDF(); };
+$('xlsx').onclick = () => { $('menu').classList.remove('open'); if (tid) exportXLSX(); };
+$('q').addEventListener('change', e => {
+  const o = [...$('tl').options].find(x => x.value === e.target.value);
+  if (o) { tid = o.dataset.id; store.set('rv_t', tid); history.replaceState(null, '', '?t=' + encodeURIComponent(D.teachers.find(t => t.id === tid).acronyms[0])); render(); }
+});
+$('refresh').onclick = () => start(true);
+async function start(force) {
+  if (!force) { const c = store.get('rv_data'); if (c) { try { init(JSON.parse(c)); } catch (e) {} } }
+  if (!D) { for (let i = 0; i < 3; i++) $('view').appendChild(el('div', null, 'sk')); }
+  try { init(await load(force)); }
+  catch (e) {
+    if (D) return;
+    const v = $('view'); v.textContent = ''; const b = el('div', null, 'card');
+    b.appendChild(el('p', 'Could not load the routine: ' + e.message + '. Check API_URL and that the Web App is deployed for "Anyone".'));
+    const r = el('button', 'Retry'); r.onclick = () => start(true); b.appendChild(r); v.appendChild(b);
+  }
+}
+setTheme(document.documentElement.dataset.theme || 'light'); pills(); start(false);
+</script>
+</body>
+</html>
